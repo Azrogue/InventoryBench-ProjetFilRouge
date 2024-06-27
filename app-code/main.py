@@ -1,114 +1,183 @@
-import os
-import platform
-import psutil
-import subprocess
-import re
 import requests
 import json
-import cpuinfo  # Assurez-vous que le module est installé via 'pip install py-cpuinfo'
+import socket
+import subprocess
+import os
+from datetime import datetime
+import sys
 
-DIRECTUS_API_URL = "https://redwire.chicken-musical.ts.net"
-DIRECTUS_API_TOKEN = "Lvfr-bSLCpREJV1aWIG67oh-fJx9qWdu"
+# Configuration Directus
+BASE_URL = 'https://directus.url'
+API_URL = f'{BASE_URL}/items'
+TOKEN = ''
 
 headers = {
-    "Authorization": f"Bearer {DIRECTUS_API_TOKEN}",
-    "Content-Type": "application/json"
+    'Authorization': f'Bearer {TOKEN}',
+    'Content-Type': 'application/json'
 }
-# Fonction pour récupérer les informations CPU
-def get_cpu_info():
-    cpu_info = cpuinfo.get_cpu_info()
-    return {
-        'marque': cpu_info['brand_raw'],
-        'frequence': cpu_info['hz_actual_friendly'],
-        'architecture': cpu_info['arch']
-    }
 
-# Fonction pour récupérer les informations mémoire sur Windows
-def get_memory_info_windows():
-    virtual_mem = psutil.virtual_memory()
-    ram_capacity_gb = virtual_mem.total / (1024 ** 3)
-    return {
-        'total': virtual_mem.total,
-        'disponible': virtual_mem.available,
-        'utilisee': virtual_mem.used,
-        'ram_capacity_gb': ram_capacity_gb,
-        'ram_manufacturer': get_ram_manufacturer()
-    }
-
-# Fonction pour obtenir le fabricant de la RAM sur Windows
-def get_ram_manufacturer():
-    command = "wmic memorychip get manufacturer"
+# Fonction pour tester la connexion au DNS
+def test_dns_connection():
     try:
-        result = subprocess.run(command, capture_output=True, text=True, shell=True)
-        lines = result.stdout.strip().split('\n')
-        manufacturers = {line.strip() for line in lines[1:] if line.strip()}  # Utiliser un ensemble pour éviter les duplications
-        if manufacturers:
-            return ', '.join(manufacturers)  # Joindre les fabricants avec une virgule
-        else:
-            return "N/A"
-    except subprocess.CalledProcessError:
-        print("Erreur lors de l'exécution de la commande 'wmic memorychip'. Assurez-vous qu'elle est installée et que vous avez les permissions nécessaires.")
-        return "N/A"
-
-# Fonction pour récupérer les informations GPU 
-def get_gpu_info():
-    gpus = []
-    system = platform.system()
-
-    if system == "Windows":
-        command = "wmic path win32_VideoController get name"
-        result = subprocess.run(command, capture_output=True, text=True, shell=True)
-        gpus = result.stdout.strip().split('\n')[1:]
-    elif system == "Linux":
-        command = "lshw -C display"
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, shell=True, check=True)
-            lines = result.stdout.strip().split('\n')
-            for line in lines:
-                if "product:" in line:
-                    gpu = line.split("product:")[1].strip()
-                    gpus.append(gpu)
-        except subprocess.CalledProcessError:
-            print("Erreur lors de l'exécution de la commande 'lshw'. Assurez-vous qu'elle est installée et que vous avez les permissions nécessaires.")
-    elif system == "Darwin":
-        command = "system_profiler SPDisplaysDataType | grep 'Chipset Model'"
-        result = subprocess.run(command, capture_output=True, text=True, shell=True)
-        gpus = re.findall(r'Chipset Model: (.+)', result.stdout)
-
-    return [gpu.strip() for gpu in gpus if gpu.strip()]
-
-# Fonction pour ajouter un composant à Directus
-def add_composant(numero_serie, nom, type_name):
-    try:
-        response = requests.get(f"{DIRECTUS_API_URL}/items/type_composant?filter[nom_type_composant][_eq]={type_name}", headers=headers)
-        response_data = response.json()
-        if 'data' in response_data and response_data['data']:
-            type_id = response_data['data'][0]['id']
-        else:
-            print(f"Erreur: Type de composant '{type_name}' introuvable.")
-            return False
-    except requests.exceptions.RequestException as e:
-        print(f"Erreur lors de la requête get_type_id: {e}")
-        return False
-
-    data = {
-        "numero_serie": numero_serie,
-        "nom": nom,
-        "type_composant": type_id
-    }
-
-    try:
-        response = requests.post(f"{DIRECTUS_API_URL}/items/Composants", headers=headers, data=json.dumps(data))
-        if response.status_code != 200:
-            print(f"Erreur lors de l'ajout du composant {nom}: {response.status_code} {response.text}")
-            return False
+        socket.gethostbyname(BASE_URL.replace('https://', '').replace('http://', ''))
+        print("Test de connexion au DNS : OK")
         return True
-    except requests.exceptions.RequestException as e:
-        print(f"Erreur lors de la requête add_composant: {e}")
+    except socket.error as e:
+        print(f"Test de connexion au DNS : FAIL ({e})")
         return False
-    
 
-def main():
+# Fonction pour créer une session
+def create_session(public_ip):
+    session_data = {
+        "launch_date": datetime.utcnow().isoformat(),
+        "public_ip": public_ip,
+        "description": "Hardware scan"
+    }
+    response = requests.post(f'{API_URL}/sessions', headers=headers, data=json.dumps(session_data))
+    if response.status_code == 200:
+        session_id = response.json()['data']['id']
+        print(f"Session créée avec succès : {session_id}")
+        return session_id
+    else:
+        print(f"Erreur lors de la création de la session: {response.status_code}")
+        print(response.json())
+        return None
+
+# Fonction pour vérifier si le script est exécuté avec des privilèges sudo
+def check_sudo():
+    if os.geteuid() != 0:
+        print("Ce script doit être exécuté avec des privilèges sudo.")
+        sys.exit(1)
+    else:
+        print("Script exécuté avec des privilèges sudo.")
+
+# Fonction pour obtenir l'IP publique
+def get_public_ip():
+    try:
+        response = requests.get('https://api.ipify.org?format=json')
+        ip = response.json()['ip']
+        print(f"IP publique récupérée : {ip}")
+        return ip
+    except requests.RequestException as e:
+        print(f"Erreur lors de la récupération de l'IP publique : {e}")
+        return None
+
+# Fonction pour exécuter lshw et obtenir les informations matérielles
+def get_hardware_info():
+    hardware_info = []
+
+    print("Récupération des informations du matériel...")
+
+    try:
+        result = subprocess.run(['lshw', '-json'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True)
+        lshw_data = json.loads(result.stdout)
+
+        # Récupération des informations CPU
+        for child in lshw_data.get('children', []):
+            if child['class'] == 'bus':
+                for item in child.get('children', []):
+                    if item['class'] == 'processor':
+                        cpu_info = {
+                            "serial_number": item.get('serial', f"CPU-{item['id']}"),
+                            "name": item.get('product', ''),
+                            "type": "CPU",
+                            "manufacturer": item.get('vendor', 'Unknown'),
+                            "other_details": {
+                                "version": item.get('version', ''),
+                                "frequency": item.get('capacity', '')
+                            }
+                        }
+                        print(f"Informations CPU récupérées: {json.dumps(cpu_info, indent=4)}")
+                        hardware_info.append(cpu_info)
+
+                    # Récupération des informations RAM
+                    if item['class'] == 'memory':
+                        for memory in item.get('children', []):
+                            if memory['class'] == 'memory':
+                                ram_info = {
+                                    "serial_number": memory.get('serial', f"RAM-{memory['id']}"),
+                                    "name": memory.get('product', 'RAM'),
+                                    "type": "RAM",
+                                    "manufacturer": memory.get('vendor', 'Unknown'),
+                                    "other_details": {
+                                        "size": memory.get('size', '')
+                                    }
+                                }
+                                print(f"Informations RAM récupérées: {json.dumps(ram_info, indent=4)}")
+                                hardware_info.append(ram_info)
+
+                    # Récupération des informations disques
+                    if item['class'] == 'storage':
+                        for disk in item.get('children', []):
+                            if disk['class'] == 'disk':
+                                disk_info = {
+                                    "serial_number": disk.get('serial', f"DISK-{disk['logicalname']}"),
+                                    "name": disk.get('product', ''),
+                                    "type": "Disk",
+                                    "manufacturer": disk.get('vendor', 'Unknown'),
+                                    "other_details": {
+                                        "size": disk.get('size', '')
+                                    }
+                                }
+                                print(f"Informations disque récupérées: {json.dumps(disk_info, indent=4)}")
+                                hardware_info.append(disk_info)
+
+    except subprocess.CalledProcessError as e:
+        print(f"Erreur lors de l'exécution de lshw: {e}")
+        print(e.stderr)
+
+    return hardware_info
+
+# Fonction pour récupérer les composants existants depuis Directus
+def get_existing_components():
+    print("Récupération des composants existants depuis Directus...")
+    response = requests.get(f'{API_URL}/components', headers=headers)
+    if response.status_code == 200:
+        existing_components = response.json()['data']
+        print(f"Composants existants récupérés : {len(existing_components)} trouvés")
+        return existing_components
+    else:
+        print(f"Erreur lors de la récupération des composants existants : {response.status_code}")
+        return []
+
+# Fonction pour comparer et mettre à jour les composants
+def update_components(new_components, existing_components, session_id):
+    new_count = 0
+    update_count = 0
+
+    print("Comparaison et mise à jour des composants...")
+
+    for new_component in new_components:
+        matched = False
+        new_component['session_id'] = session_id  # Associer le composant à la session actuelle
+        for existing_component in existing_components:
+            if new_component["serial_number"] == existing_component["serial_number"]:
+                matched = True
+                # Mise à jour du composant
+                print(f"Mise à jour du composant existant: {json.dumps(new_component, indent=4)}")
+                response = requests.patch(f'{API_URL}/components/{existing_component["id"]}', headers=headers, data=json.dumps(new_component))
+                if response.status_code == 200:
+                    print(f"Composant mis à jour : {new_component['serial_number']}")
+                    update_count += 1
+                else:
+                    print(f"Erreur lors de la mise à jour du composant {new_component['serial_number']} : {response.status_code}")
+                    print(response.json())
+                break
+        if not matched:
+            # Création d'un nouveau composant
+            print(f"Création d'un nouveau composant: {json.dumps(new_component, indent=4)}")
+            response = requests.post(f'{API_URL}/components', headers=headers, data=json.dumps(new_component))
+            if response.status_code == 200:
+                print(f"Composant créé : {new_component['serial_number']}")
+                new_count += 1
+            else:
+                print(f"Erreur lors de la création du composant {new_component['serial_number']} : {response.status_code}")
+                print(response.json())
+
+    print(f"{new_count} nouveaux composants créés, {update_count} composants mis à jour")
+
+# Exécution principale
+if __name__ == "__main__":
     # ASCII art title
     title = """
     \033[92m
@@ -120,52 +189,18 @@ def main():
 ██║██║ ╚████║ ╚████╔╝ ███████╗██║ ╚████║   ██║   ╚██████╔╝██║  ██║   ██║       ██████╔╝███████╗██║ ╚████║╚██████╗██║  ██║
 ╚═╝╚═╝  ╚═══╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝       ╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝
 
-
                    By Judi and Billel
     \033[0m
     """
-
     # Print the title
     print(title)
-
-    # Récupération des informations CPU
-    cpu_info = get_cpu_info()
-    cpu_model_name = cpu_info.get('marque', 'N/A')
-    # Ajout du composant CPU à Directus
-    success = add_composant("N/A", f"{cpu_model_name}", "CPU")
-    if success:
-        print(f"Composant CPU ajouté: {cpu_model_name}")
-    else:
-        print("Échec de l'ajout du composant CPU")
-
-    # Récupération des informations mémoire spécifique à Windows
-    memory_info = get_memory_info_windows()
-    ram_capacity_gb = memory_info.get('ram_capacity_gb', 0)
-    ram_manufacturer = memory_info.get('ram_manufacturer', 'N/A')
-
-    # Ajout du composant RAM à Directus avec le fabricant et la capacité
-    success = add_composant("N/A", f"{ram_manufacturer} {ram_capacity_gb:.2f}GB", "RAM")
-    if success:
-        print(f"Composant RAM ajouté: {ram_manufacturer} {ram_capacity_gb:.2f}GB")
-    else:
-        print("Échec de l'ajout du composant RAM")
-
-    # Récupération des informations GPU
-    gpu_info = get_gpu_info()
-    for gpu in gpu_info:
-        # Ajout du composant GPU à Directus
-        success = add_composant("N/A", f"{gpu}", "GPU")
-        if success:
-            print(f"Composant GPU ajouté: {gpu}")
-        else:
-            print(f"Échec de l'ajout du composant GPU: {gpu}")
-
-
-    # Prompt the user to press a key to continue to bash
-    input("\nPress any key to continue to a bash terminal...")
-
-    # Open a bash shell
-    os.system("bash")
-
-if __name__ == "__main__":
-    main()
+    
+    check_sudo()
+    if test_dns_connection():
+        public_ip = get_public_ip()
+        if public_ip:
+            session_id = create_session(public_ip)
+            if session_id:
+                new_components = get_hardware_info()
+                existing_components = get_existing_components()
+                update_components(new_components, existing_components, session_id)
