@@ -2,59 +2,74 @@
 {
   imports = [ <nixpkgs/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix> ];
 
-  # compress 6x faster than default
-  # but iso is 15% bigger
-  # default is xz which is very slow
+  # Compress 6x faster than default but iso is 15% bigger
   isoImage.squashfsCompression = "zstd -Xcompression-level 6";
 
-  # my azerty keyboard
+  # My azerty keyboard
   i18n.defaultLocale = "fr_FR.UTF-8";
   services.xserver.layout = "fr";
-  console = {
-    keyMap = "fr";
-  };
+  console.keyMap = "fr";
 
-  # xanmod kernel for better performance
-  # see https://xanmod.org/
+  # Xanmod kernel for better performance
   boot.kernelPackages = pkgs.linuxPackages_xanmod;
-
-  # Use the latest Linux kernel
-  # boot.kernelPackages = pkgs.linuxPackages_latest;
-
-  # Needed for https://github.com/NixOS/nixpkgs/issues/58959
+  
+  # Needed for specific file system support
   boot.supportedFilesystems = lib.mkForce [ "btrfs" "reiserfs" "vfat" "f2fs" "xfs" "ntfs" "cifs" ];
 
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
 
   networking.useDHCP = true;
-  # Set your time zone.
   time.timeZone = "Europe/Paris";
 
+  # Environment packages
   environment.systemPackages = with pkgs; [
-    (pkgs.python3.withPackages (python-pkgs: [
-      python-pkgs.psutil
-      python-pkgs.requests
-      python-pkgs.py-cpuinfo
-    ]))
+    (pkgs.python3.withPackages (ps: with ps; [ requests ]))
+    lshw
+    wpa_supplicant
+    wirelesstools
+    iw
   ];
 
-    systemd.services.myPythonScript = {
-    description = "Run my Python script";
-    after = [ "network.target" "getty@tty1.service" ];
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig = {
-      ExecStart = "/run/current-system/sw/bin/python3 /iso/InventoryBench/main.py";
-      Restart = "always";
-      StandardInput = "tty";
-      StandardOutput = "tty";
-      TTYPath = "/dev/tty1";
-    };
+  isoImage.contents = [
+    { source = ./main.py; target = "/InventoryBench/main.py"; mode = "0755"; }
+  ];
+
+  users.users.nixos = {
+    isNormalUser = true;
+    extraGroups = [ "wheel" ];
+    shell = pkgs.bash;
+    initialPassword = "nixos";
   };
 
-  isoImage = {
-    contents = [
-      { source = ./main.py; target = "/InventoryBench/main.py"; mode = "0755";  }
-    ];
+  boot.kernelParams = [ "video=HDMI-1:1280x720@60" ];
+
+  services.kmscon = {
+    enable = true;
+    autologinUser = "nixos";
+    extraConfig = ''
+      xkb-layout=fr
+      font-size=12
+    '';     
+    extraOptions = "--term xterm-256color --font-engine unifont";
+  };
+
+  programs.bash.shellAliases = {
+    inventory-bench = "sudo python3 /iso/InventoryBench/main.py";
+  };
+
+  programs.bash.interactiveShellInit = ''
+    sudo python3 /iso/InventoryBench/main.py
+  '';
+
+  networking.wireless = {
+    enable = true;
+    userControlled.enable = true;
+    networks = {
+      "👨‍🎓CFA ITIS | ETUDIANTS" = {};
+      "iPhone Y" = {
+        psk = "password";
+      };
+    };
   };
 }

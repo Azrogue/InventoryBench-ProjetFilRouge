@@ -4,10 +4,11 @@ import socket
 import subprocess
 import os
 from datetime import datetime
+import time
 import sys
 
 # Configuration Directus
-BASE_URL = 'https://directus.url'
+BASE_URL = 'https://redwire.chicken-musical.ts.net'
 API_URL = f'{BASE_URL}/items'
 TOKEN = ''
 
@@ -16,15 +17,25 @@ headers = {
     'Content-Type': 'application/json'
 }
 
+
 # Fonction pour tester la connexion au DNS
+MAX_RETRIES = 5
+RETRY_INTERVAL = 5 # En Secondes 
+
 def test_dns_connection():
-    try:
-        socket.gethostbyname(BASE_URL.replace('https://', '').replace('http://', ''))
-        print("Test de connexion au DNS : OK")
-        return True
-    except socket.error as e:
-        print(f"Test de connexion au DNS : FAIL ({e})")
-        return False
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            socket.gethostbyname(BASE_URL.replace('https://', '').replace('http://', ''))
+            print("Test de connexion au DNS : OK")
+            return True
+        except socket.error as e:
+            print(f"Test de connexion au DNS : FAIL ({e}) - Tentative {attempt}/{MAX_RETRIES}")
+            if attempt < MAX_RETRIES:
+                print(f"Nouvelle tentative dans {RETRY_INTERVAL} secondes...")
+                time.sleep(RETRY_INTERVAL)
+            else:
+                print(f"L'adresse {BASE_URL} n'est pas joignable après {MAX_RETRIES} tentatives. Arrêt du programme.")
+                return False
 
 # Fonction pour créer une session
 def create_session(public_ip):
@@ -194,9 +205,10 @@ if __name__ == "__main__":
     """
     # Print the title
     print(title)
-    
+
     check_sudo()
     if test_dns_connection():
+        print("Connexion réussie.")
         public_ip = get_public_ip()
         if public_ip:
             session_id = create_session(public_ip)
@@ -204,3 +216,6 @@ if __name__ == "__main__":
                 new_components = get_hardware_info()
                 existing_components = get_existing_components()
                 update_components(new_components, existing_components, session_id)
+    else:
+        print("Impossible de se connecter au DNS. Vérifiez votre connexion réseau et réessayez.")
+        exit(1)
